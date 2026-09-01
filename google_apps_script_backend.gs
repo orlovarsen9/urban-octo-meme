@@ -65,6 +65,7 @@ function doPost(e) {
     if (action === "markMessageRead") return handleMarkMessageRead(body);
     if (action === "saveManagerSettings") return handleSaveManagerSettings(body);
     if (action === "saveChecklistItem") return handleSaveChecklistItem(body);
+    if (action === "deleteManager") return handleDeleteManager(body);
     if (action === "saveState") return handleSaveState(body);
     if (action === "logout") return handleLogout(body);
 
@@ -87,16 +88,7 @@ function defaultState() {
         avatar:"",
         active:true
       },
-      {
-        id:"u_mgr1",
-        name:"Александр",
-        login:"manager1",
-        passwordHash:hashPassword("manager123"),
-        role:"manager",
-        nick:"",
-        avatar:"",
-        active:true
-      },
+      
       {
         id:"u_view",
         name:"Наблюдатель",
@@ -465,6 +457,64 @@ function handleSaveChecklistItem(body) {
   }
 }
 
+
+function handleDeleteManager(body) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const state = loadState();
+    const user = requireUser(body.token, state);
+    if (!user || user.role !== "viewer") {
+      return jsonOut({ok:false,error:"Удалять менеджеров может только наблюдатель"});
+    }
+
+    const managerId = String(body.managerId || "");
+    const manager = (state.users || []).find(function(u){
+      return u.id === managerId && u.role === "manager";
+    });
+    if (!manager) return jsonOut({ok:false,error:"Менеджер не найден"});
+
+    // Полное удаление менеджера.
+    state.users = (state.users || []).filter(function(u){ return u.id !== managerId; });
+
+    // Полностью удаляем все проекты менеджера.
+    state.clients = (state.clients || []).filter(function(p){ return p.managerId !== managerId; });
+
+    // Удаляем его персональные настройки, блокнот и сообщения.
+    if (state.managerConfigs && Object.prototype.hasOwnProperty.call(state.managerConfigs, managerId)) {
+      delete state.managerConfigs[managerId];
+    }
+
+    // Удаляем связанные активные сессии этого пользователя.
+    try {
+      const props = PropertiesService.getScriptProperties();
+      const all = props.getProperties();
+      Object.keys(all).forEach(function(k){
+        if (k.indexOf("session:") !== 0) return;
+        try {
+          const s = JSON.parse(all[k] || "{}");
+          if (s.userId === managerId) props.deleteProperty(k);
+        } catch(e) {}
+      });
+    } catch(e) {}
+
+    state.audit = Array.isArray(state.audit) ? state.audit : [];
+    state.audit.push({
+      ts:new Date().toISOString(),
+      userId:user.id,
+      text:"Наблюдатель полностью удалил менеджера: " + String(manager.name || manager.login || managerId)
+    });
+
+    saveState(state);
+    mirrorSheets(state);
+    SpreadsheetApp.flush();
+
+    return jsonOut({ok:true,state:sanitizeState(state)});
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function handleSaveState(body) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -636,6 +686,22 @@ function getDataSheet() {
   let sh = ss.getSheetByName(DATA_SHEET);
   if (!sh) sh = ss.insertSheet(DATA_SHEET);
   return sh;
+}
+
+
+function purgeAlexander(state) {
+  state = state || {};
+  const ids = (state.users || []).filter(function(u){
+    return u.role === "manager" && String(u.name || "").trim().toLowerCase() === "александр";
+  }).map(function(u){return u.id;});
+
+  if (!ids.length) return state;
+
+  state.users = (state.users || []).filter(function(u){return ids.indexOf(u.id) < 0;});
+  state.clients = (state.clients || []).filter(function(p){return ids.indexOf(p.managerId) < 0;});
+  state.managerConfigs = state.managerConfigs || {};
+  ids.forEach(function(id){ delete state.managerConfigs[id]; });
+  return state;
 }
 
 function loadState() {

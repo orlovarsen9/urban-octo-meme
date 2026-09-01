@@ -7,7 +7,7 @@
   const seed = {
     users: [
       {id:"u_admin",name:"Главный администратор",login:"admin",password:"admin123",role:"admin",phone:"",active:true},
-      {id:"u_mgr1",name:"Александр",login:"manager1",password:"manager123",role:"manager",phone:"",active:true},
+      
       {id:"u_view",name:"Наблюдатель",login:"viewer",password:"viewer123",role:"viewer",phone:"",active:true}
     ],
     defaultStages:["Начальная","Развитие","Слияние","Залив. инф","Пред. предлог","72 часа"],
@@ -842,6 +842,29 @@
         </div>
       </div>`);
     wireNav();
+    document.querySelectorAll("[data-delete-manager]").forEach(btn=>btn.onclick=async()=>{
+      const managerId=btn.dataset.deleteManager;
+      const manager=db.users.find(u=>u.id===managerId);
+      if(!manager)return;
+      if(!confirm(`Полностью удалить менеджера «${manager.name}» и все его проекты/настройки? Это действие нельзя отменить.`)) return;
+      btn.disabled=true;
+      btn.textContent="Удаляю...";
+      try{
+        const data=await api("deleteManager",{managerId});
+        if(data.state){
+          db=data.state;
+          localStorage.setItem(CACHE_KEY,JSON.stringify(db));
+        }else{
+          await fetchState();
+        }
+        render();
+      }catch(e){
+        btn.disabled=false;
+        btn.textContent="Удалить менеджера";
+        alert("Не удалось удалить менеджера: "+(e.message||e));
+      }
+    });
+
     const addBlockBtn=document.getElementById("addBlockOption");
     if(addBlockBtn){
       addBlockBtn.onclick=()=>{
